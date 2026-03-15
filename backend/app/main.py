@@ -5,7 +5,7 @@ from collections.abc import AsyncIterator
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse
 
 logging.basicConfig(level=logging.INFO)
 
@@ -19,9 +19,8 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await asset_cache.initialize()
-    riot_auth.start_callback_server(settings.API_URL)
+    riot_auth.configure(settings.API_URL)
     yield
-    riot_auth.stop_callback_server()
 
 
 app = FastAPI(
@@ -57,6 +56,12 @@ async def request_logging_middleware(request: Request, call_next):
 @app.get("/api/health")
 async def health_check():
     return {"status": "ok"}
+
+
+@app.get("/redirect", response_class=HTMLResponse)
+async def oauth_redirect(auth_id: str = ""):
+    """Serve the OAuth redirect page that captures tokens from the URL fragment."""
+    return riot_auth.get_redirect_page(auth_id)
 
 
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])

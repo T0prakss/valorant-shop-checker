@@ -28,7 +28,7 @@ export default function LoginPage() {
     setError(null);
 
     try {
-      const { auth_url } = await api.startAuth();
+      const { auth_url, auth_id } = await api.startAuth();
 
       // Open Riot login in a new tab
       window.open(auth_url, '_blank', 'noopener');
@@ -39,7 +39,7 @@ export default function LoginPage() {
 
       pollRef.current = setInterval(async () => {
         try {
-          const res = await api.pollAuth();
+          const res = await api.pollAuth(auth_id);
           if (res.status === 'success' && res.puuid) {
             if (pollRef.current) clearInterval(pollRef.current);
             pollRef.current = null;

@@ -59,14 +59,8 @@ async def start_login(request: Request) -> AuthStartResponse:
     """Start OAuth login flow. Returns the Riot auth URL and an auth_id for polling."""
     _check_rate_limit(request.client.host if request.client else "unknown")
 
-    try:
-        riot_auth.start_callback_server()
-    except OSError as e:
-        logger.error("Callback server failed: %s", e)
-        raise HTTPException(status_code=503, detail="Auth service unavailable")
-
     auth_id = str(uuid.uuid4())
-    auth_url = riot_auth.get_auth_url()
+    auth_url = riot_auth.get_auth_url(auth_id)
 
     return AuthStartResponse(auth_url=auth_url, auth_id=auth_id)
 
@@ -76,6 +70,7 @@ async def oauth_callback(request: Request, response: Response) -> CallbackRespon
     """Receive tokens from the OAuth redirect page's JavaScript."""
     params = dict(request.query_params)
 
+    auth_id = params.get("auth_id", "")
     access_token = params.get("access_token")
     id_token = params.get("id_token", "")
 
@@ -96,20 +91,20 @@ async def oauth_callback(request: Request, response: Response) -> CallbackRespon
         )
         session_token = store.create(session_data)
 
-        # Store the session token keyed by a temporary auth_id so the
-        # frontend can pick it up via the /poll endpoint.
-        auth_id = str(uuid.uuid4())
-        riot_auth.store_pending_auth(auth_id, {
-            "session_token": session_token,
-            "puuid": puuid,
-        })
+        # Store the result keyed by the auth_id from /start so the
+        # frontend can pick it up via /poll.
+        if auth_id:
+            riot_auth.store_pending_auth(auth_id, {
+                "session_token": session_token,
+                "puuid": puuid,
+            })
 
         response.set_cookie(
             key="session_token",
             value=session_token,
             httponly=True,
-            secure=False,  # localhost dev — set True in production
-            samesite="lax",
+            secure=True,
+            samesite="none",
             max_age=3 * 3600,
         )
 
@@ -132,18 +127,30 @@ async def oauth_callback(request: Request, response: Response) -> CallbackRespon
 
 @router.get("/poll")
 async def poll_auth(
+    request: Request,
     response: Response,
-    session_token: str | None = Cookie(default=None),
 ) -> AuthPollResponse:
-    """Poll for auth completion. The session cookie is set by /callback."""
-    if not session_token:
+    """Poll for auth completion using the auth_id from /start."""
+    auth_id = request.query_params.get("auth_id", "")
+    if not auth_id:
         return AuthPollResponse(status="pending")
 
-    session = store.get(session_token)
-    if not session:
+    pending = riot_auth.pop_pending_auth(auth_id)
+    if not pending:
         return AuthPollResponse(status="pending")
 
-    return AuthPollResponse(status="success", puuid=session.puuid)
+    # Set the session cookie on the frontend's polling request so
+    # subsequent API calls are authenticated.
+    response.set_cookie(
+        key="session_token",
+        value=pending["session_token"],
+        httponly=True,
+        secure=True,
+        samesite="none",
+        max_age=3 * 3600,
+    )
+
+    return AuthPollResponse(status="success", puuid=pending["puuid"])
 
 
 @router.post("/logout")
@@ -153,7 +160,7 @@ async def logout(
 ) -> dict:
     if session_token:
         store.delete(session_token)
-        response.delete_cookie("session_token")
+        response.delete_cookie("session_token", secure=True, samesite="none")
     return {"status": "ok"}
 
 

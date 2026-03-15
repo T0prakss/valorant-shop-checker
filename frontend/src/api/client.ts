@@ -37,8 +37,8 @@ export function startAuth(): Promise<AuthStartResponse> {
   return request('/api/auth/start', { method: 'POST' });
 }
 
-export function pollAuth(): Promise<AuthPollResponse> {
-  return request('/api/auth/poll');
+export function pollAuth(authId: string): Promise<AuthPollResponse> {
+  return request(`/api/auth/poll?auth_id=${encodeURIComponent(authId)}`);
 }
 
 export function logout(): Promise<{ status: string }> {

@@ -1,7 +1,9 @@
 """Riot authentication service.
 
-Uses OAuth redirect flow — the user logs in via their real browser on Riot's
-login page. After login, Riot redirects to localhost where we capture the tokens.
+Uses OAuth implicit-grant flow — the user logs in via their real browser on
+Riot's login page. After login, Riot redirects to the backend's /redirect
+endpoint where client-side JS captures the URL-fragment tokens and POSTs
+them to /api/auth/callback.
 
 Downstream API calls (entitlements, userinfo, geo, storefront) use the
 access_token obtained from the redirect.
@@ -9,8 +11,7 @@ access_token obtained from the redirect.
 
 import logging
 import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from urllib.parse import parse_qs
+from urllib.parse import quote
 
 import httpx
 
@@ -20,15 +21,18 @@ ENTITLEMENTS_URL = "https://entitlements.auth.riotgames.com/api/token/v1"
 USERINFO_URL = "https://auth.riotgames.com/userinfo"
 GEO_URL = "https://riot-geo.pas.si.riotgames.com/pas/v1/product/valorant"
 
-AUTH_URL = (
+# The redirect_uri is built dynamically from API_URL via get_auth_url().
+_AUTH_URL_TEMPLATE = (
     "https://auth.riotgames.com/authorize"
-    "?redirect_uri=http%3A%2F%2Flocalhost%2Fredirect"
+    "?redirect_uri={redirect_uri}"
     "&client_id=riot-client"
     "&response_type=token%20id_token"
     "&nonce=1"
     "&scope=openid%20link%20ban%20lol_region%20account"
     "&prompt=login"
 )
+
+_api_url: str = "http://localhost:8000"
 
 REGION_TO_SHARD = {
     "na": "na",
@@ -53,15 +57,27 @@ def _check_rate_limit(response: httpx.Response) -> None:
         raise RateLimitError("Rate limited by Riot auth servers")
 
 
-# --- OAuth callback server (port 80) ---
+# --- Pending auth store ---
 
 _pending_auth: dict[str, dict] = {}
 _pending_lock = threading.Lock()
-_callback_server: HTTPServer | None = None
-_callback_thread: threading.Thread | None = None
 
 
-def _get_callback_page(backend_url: str) -> bytes:
+def configure(api_url: str) -> None:
+    """Store the public API URL used to build redirect URIs."""
+    global _api_url
+    _api_url = api_url.rstrip("/")
+    logger.info("Riot auth configured with API_URL=%s", _api_url)
+
+
+def get_redirect_page(auth_id: str) -> str:
+    """Return the HTML page served at /redirect.
+
+    The page extracts OAuth tokens from the URL fragment and POSTs them
+    to /api/auth/callback along with the auth_id so the polling frontend
+    can pick up the result.
+    """
+    backend_url = _api_url
     return f"""<!DOCTYPE html>
 <html>
 <head><title>Valorant Shop - Login</title></head>
@@ -71,9 +87,8 @@ def _get_callback_page(backend_url: str) -> bytes:
     <script>
         const hash = window.location.hash.substring(1);
         if (hash) {{
-            fetch('{backend_url}/api/auth/callback?' + hash, {{
+            fetch('{backend_url}/api/auth/callback?auth_id={auth_id}&' + hash, {{
                 method: 'POST',
-                mode: 'cors',
                 credentials: 'include',
             }}).then(r => r.json()).then(data => {{
                 if (data.status === 'success') {{
@@ -93,58 +108,17 @@ def _get_callback_page(backend_url: str) -> bytes:
         }}
     </script>
 </div>
-</body></html>""".encode()
+</body></html>"""
 
 
-class _RedirectHandler(BaseHTTPRequestHandler):
-    backend_url: str = "http://localhost:8000"
+def get_auth_url(auth_id: str) -> str:
+    """Return the Riot OAuth URL, with redirect_uri pointing to our /redirect endpoint.
 
-    def do_GET(self):
-        if self.path.startswith("/redirect"):
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html")
-            self.end_headers()
-            self.wfile.write(_get_callback_page(self.backend_url))
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-    def log_message(self, format, *args):
-        pass
-
-
-def start_callback_server(backend_url: str = "http://localhost:8000") -> None:
-    """Start the port-80 callback server if not already running."""
-    global _callback_server, _callback_thread
-
-    if _callback_server is not None:
-        return
-
-    _RedirectHandler.backend_url = backend_url
-
-    try:
-        _callback_server = HTTPServer(("localhost", 80), _RedirectHandler)
-        _callback_thread = threading.Thread(target=_callback_server.serve_forever, daemon=True)
-        _callback_thread.start()
-        logger.info("Auth callback server started on port 80")
-    except OSError as e:
-        logger.error("Failed to start callback server on port 80: %s", e)
-        logger.error("Try running with admin privileges, or free port 80")
-        raise
-
-
-def stop_callback_server() -> None:
-    """Stop the callback server."""
-    global _callback_server, _callback_thread
-    if _callback_server:
-        _callback_server.shutdown()
-        _callback_server = None
-        _callback_thread = None
-
-
-def get_auth_url() -> str:
-    """Return the Riot OAuth URL for the user to open in their browser."""
-    return AUTH_URL
+    The auth_id is passed as a query param on the redirect URI so the
+    callback page can thread it through to /api/auth/callback.
+    """
+    redirect_uri = f"{_api_url}/redirect?auth_id={auth_id}"
+    return _AUTH_URL_TEMPLATE.format(redirect_uri=quote(redirect_uri, safe=""))
 
 
 def store_pending_auth(auth_id: str, tokens: dict) -> None:
@@ -158,11 +132,6 @@ def pop_pending_auth(auth_id: str) -> dict | None:
     with _pending_lock:
         return _pending_auth.pop(auth_id, None)
 
-
-def get_pending_auth(auth_id: str) -> dict | None:
-    """Check if pending auth is complete."""
-    with _pending_lock:
-        return _pending_auth.get(auth_id)
 
 
 # --- Downstream API calls ---
