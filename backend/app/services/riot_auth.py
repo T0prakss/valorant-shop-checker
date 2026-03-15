@@ -15,6 +15,7 @@ access_token obtained from the auth flow.
 """
 
 import logging
+import ssl
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -25,6 +26,36 @@ AUTH_BASE = "https://auth.riotgames.com/api/v1/authorization"
 ENTITLEMENTS_URL = "https://entitlements.auth.riotgames.com/api/token/v1"
 USERINFO_URL = "https://auth.riotgames.com/userinfo"
 GEO_URL = "https://riot-geo.pas.si.riotgames.com/pas/v1/product/valorant"
+
+# Riot's auth API requires a Riot Client user-agent and specific TLS
+# ciphers, otherwise it silently rejects credentials with auth_failure.
+_RIOT_CLIENT_UA = (
+    "RiotClient/60.0.6.4770705.4749685 rso-auth "
+    "(Windows;10;;Professional, x64)"
+)
+
+_AUTH_HEADERS = {
+    "Content-Type": "application/json",
+    "User-Agent": _RIOT_CLIENT_UA,
+    "Accept": "application/json",
+}
+
+# Build an SSL context with the ciphers Riot expects
+RIOT_CIPHERS = (
+    "ECDH+AESGCM:DH+AESGCM:ECDH+AES256:DH+AES256:"
+    "ECDH+AES128:DH+AES:ECDH+HIGH:DH+HIGH:ECDH+3DES:"
+    "DH+3DES:RSA+AESGCM:RSA+AES:RSA+HIGH:RSA+3DES:!aNULL:"
+    "!eNULL:!MD5"
+)
+
+
+def _make_ssl_ctx() -> ssl.SSLContext:
+    ctx = ssl.create_default_context()
+    ctx.set_ciphers(RIOT_CIPHERS)
+    return ctx
+
+
+_ssl_ctx = _make_ssl_ctx()
 
 REGION_TO_SHARD = {
     "na": "na",
@@ -77,8 +108,10 @@ async def authenticate(username: str, password: str) -> dict[str, str]:
     Returns dict with access_token and id_token.
     Raises MfaRequiredError if MFA is needed.
     """
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        # Step 1: Initialize auth session
+    async with httpx.AsyncClient(
+        timeout=30.0, headers=_AUTH_HEADERS, verify=_ssl_ctx
+    ) as client:
+        # Step 1: Initialize auth session (establishes cookies)
         init_resp = await client.post(
             AUTH_BASE,
             json={
@@ -92,7 +125,7 @@ async def authenticate(username: str, password: str) -> dict[str, str]:
         _check_rate_limit(init_resp)
         init_resp.raise_for_status()
 
-        # Step 2: Submit credentials
+        # Step 2: Submit credentials (same client keeps cookies)
         auth_resp = await client.put(
             AUTH_BASE,
             json={
@@ -107,6 +140,7 @@ async def authenticate(username: str, password: str) -> dict[str, str]:
         auth_resp.raise_for_status()
 
         data = auth_resp.json()
+        logger.debug("Auth response type=%s", data.get("type"))
         resp_type = data.get("type")
 
         if resp_type == "response":
@@ -115,15 +149,14 @@ async def authenticate(username: str, password: str) -> dict[str, str]:
 
         if resp_type == "multifactor":
             email = data.get("multifactor", {}).get("email", "")
-            # Serialize cookies so we can resume the session for MFA
-            cookies = dict(auth_resp.cookies)
-            # Also include cookies from the init request
-            cookies.update(dict(init_resp.cookies))
+            # Collect all cookies from the session for MFA continuation
+            cookies = dict(client.cookies)
             raise MfaRequiredError(email=email, cookies=cookies)
 
         if resp_type == "auth" and data.get("error") == "auth_failure":
             raise AuthenticationError("Invalid username or password")
 
+        logger.warning("Unexpected auth response: %s", data)
         raise AuthenticationError(
             data.get("error", "Unknown authentication error")
         )
@@ -134,7 +167,9 @@ async def authenticate_mfa(code: str, cookies: dict[str, str]) -> dict[str, str]
 
     Returns dict with access_token and id_token.
     """
-    async with httpx.AsyncClient(timeout=30.0, cookies=cookies) as client:
+    async with httpx.AsyncClient(
+        timeout=30.0, headers=_AUTH_HEADERS, verify=_ssl_ctx, cookies=cookies
+    ) as client:
         resp = await client.put(
             AUTH_BASE,
             json={
