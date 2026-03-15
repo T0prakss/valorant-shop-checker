@@ -6,11 +6,32 @@ import type {
 } from '../types';
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? '';
+const TOKEN_KEY = 'session_token';
+
+export function getStoredToken(): string | null {
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+export function storeToken(token: string): void {
+  localStorage.setItem(TOKEN_KEY, token);
+}
+
+export function clearToken(): void {
+  localStorage.removeItem(TOKEN_KEY);
+}
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+
+  const token = getStoredToken();
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
   const res = await fetch(`${BASE_URL}${path}`, {
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     ...options,
   });
   if (!res.ok) {
@@ -24,6 +45,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 export interface LoginResponse {
   status: 'success' | 'error';
+  session_token?: string | null;
   puuid?: string | null;
   error?: string | null;
 }

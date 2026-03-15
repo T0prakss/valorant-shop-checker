@@ -3,7 +3,7 @@ import threading
 import time
 
 import httpx
-from fastapi import APIRouter, Cookie, HTTPException, Request, Response
+from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from app.models.auth import SessionData
@@ -33,6 +33,14 @@ def _check_rate_limit(ip: str) -> None:
         _rate_log[ip] = timestamps
 
 
+def _get_token_from_header(request: Request) -> str | None:
+    """Extract session token from Authorization: Bearer <token> header."""
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        return auth[7:]
+    return None
+
+
 # --- Request/response models ---
 
 class AuthUrlResponse(BaseModel):
@@ -45,6 +53,7 @@ class TokenSubmitRequest(BaseModel):
 
 class LoginResponse(BaseModel):
     status: str  # "success" | "error"
+    session_token: str | None = None
     puuid: str | None = None
     error: str | None = None
 
@@ -58,7 +67,7 @@ async def get_login_url() -> AuthUrlResponse:
 
 
 @router.post("/token", response_model=LoginResponse)
-async def submit_token(body: TokenSubmitRequest, request: Request, response: Response) -> LoginResponse:
+async def submit_token(body: TokenSubmitRequest, request: Request) -> LoginResponse:
     """Accept the pasted redirect URL, extract tokens, and create a session."""
     _check_rate_limit(request.client.host if request.client else "unknown")
 
@@ -80,16 +89,7 @@ async def submit_token(body: TokenSubmitRequest, request: Request, response: Res
         )
         session_token = store.create(session_data)
 
-        response.set_cookie(
-            key="session_token",
-            value=session_token,
-            httponly=True,
-            secure=True,
-            samesite="none",
-            max_age=3 * 3600,
-        )
-
-        return LoginResponse(status="success", puuid=puuid)
+        return LoginResponse(status="success", session_token=session_token, puuid=puuid)
 
     except riot_auth.AuthenticationError as e:
         return LoginResponse(status="error", error=str(e))
@@ -107,24 +107,20 @@ async def submit_token(body: TokenSubmitRequest, request: Request, response: Res
 
 
 @router.post("/logout")
-async def logout(
-    response: Response,
-    session_token: str | None = Cookie(default=None),
-) -> dict:
-    if session_token:
-        store.delete(session_token)
-        response.delete_cookie("session_token", secure=True, samesite="none")
+async def logout(request: Request) -> dict:
+    token = _get_token_from_header(request)
+    if token:
+        store.delete(token)
     return {"status": "ok"}
 
 
 @router.get("/session")
-async def check_session(
-    session_token: str | None = Cookie(default=None),
-) -> dict:
-    if not session_token:
+async def check_session(request: Request) -> dict:
+    token = _get_token_from_header(request)
+    if not token:
         return {"valid": False}
 
-    session = store.get_or_reauth(session_token)
+    session = store.get_or_reauth(token)
     if not session:
         return {"valid": False}
 

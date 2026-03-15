@@ -1,7 +1,7 @@
 import logging
 
 import httpx
-from fastapi import APIRouter, Cookie, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.models.auth import SessionData
 from app.models.store import BundleResponse, DailyStoreResponse, Wallet
@@ -13,8 +13,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-async def get_session(session_token: str | None = Cookie(default=None)) -> SessionData:
-    """Dependency: extract and validate the session from the cookie."""
+async def get_session(request: Request) -> SessionData:
+    """Dependency: extract and validate the session from the Authorization header."""
+    auth = request.headers.get("Authorization", "")
+    session_token = auth[7:] if auth.startswith("Bearer ") else None
+
     if not session_token:
         raise HTTPException(status_code=401, detail="Not authenticated")
 

@@ -29,6 +29,7 @@ function authReducer(state: AuthState, action: AuthAction): AuthState {
     case 'LOGIN_ERROR':
       return { ...state, status: 'error', error: action.error };
     case 'LOGOUT':
+      api.clearToken();
       return { ...initialState };
     case 'SESSION_RESTORED':
       return {
@@ -52,12 +53,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(authReducer, initialState);
 
   useEffect(() => {
+    // Only check session if we have a stored token
+    if (!api.getStoredToken()) return;
+
     api.checkSession().then((res) => {
       if (res.valid && res.puuid) {
         dispatch({ type: 'SESSION_RESTORED', puuid: res.puuid });
+      } else {
+        api.clearToken();
       }
     }).catch(() => {
-      // No valid session, stay idle
+      api.clearToken();
     });
   }, []);
 

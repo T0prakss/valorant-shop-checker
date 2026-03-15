@@ -43,7 +43,8 @@ export default function LoginPage() {
     try {
       const res = await api.submitToken(pastedUrl.trim());
 
-      if (res.status === 'success' && res.puuid) {
+      if (res.status === 'success' && res.puuid && res.session_token) {
+        api.storeToken(res.session_token);
         dispatch({ type: 'LOGIN_SUCCESS', puuid: res.puuid });
         navigate('/shop');
       } else {
