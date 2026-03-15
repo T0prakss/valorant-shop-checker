@@ -3,7 +3,7 @@ import threading
 import time
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from app.models.auth import SessionData

@@ -1,73 +1,50 @@
-# React + TypeScript + Vite
+# Frontend — Valorant Shop Checker
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React SPA with a Valorant-themed dark UI for viewing your daily shop.
 
-Currently, two official plugins are available:
+## Running Locally
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm install
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+The dev server starts at `http://localhost:5173` with a proxy forwarding `/api` requests to `http://localhost:8000`.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## Environment Variables
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+| Variable | Required | Description |
+|---|---|---|
+| `VITE_API_URL` | No | Backend API base URL. Not needed in dev (Vite proxy handles it). Set to the backend URL in production (e.g. `https://valshop.duckdns.org`). |
+
+## Building for Production
+
+```bash
+npm run build
+```
+
+Output goes to `dist/`. Deployed automatically via Vercel's git integration on push to `master`.
+
+## Component Structure
+
+```
+src/
+├── pages/
+│   ├── LoginPage.tsx       # Two-stage paste-URL auth flow
+│   └── ShopPage.tsx        # Daily store, bundles, wallet display
+├── components/
+│   ├── SkinCard.tsx        # Individual skin offer card with tier coloring
+│   ├── BundleCard.tsx      # Bundle display with item grid and pricing
+│   ├── CountdownTimer.tsx  # Store rotation countdown with auto-refresh
+│   ├── WalletDisplay.tsx   # VP and Radianite balance in header
+│   ├── ProtectedRoute.tsx  # Redirect to login if not authenticated
+│   └── ErrorBoundary.tsx   # Top-level error boundary
+├── api/
+│   └── client.ts           # API client with localStorage token management
+├── context/
+│   └── AuthContext.tsx      # Auth state via useReducer + session restore
+├── hooks/
+│   └── useAuth.ts          # Convenience hook for AuthContext
+└── types/
+    └── index.ts            # Shared TypeScript interfaces
 ```

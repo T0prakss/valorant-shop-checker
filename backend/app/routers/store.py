@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.models.auth import SessionData
 from app.models.store import BundleResponse, DailyStoreResponse, Wallet
-from app.services import riot_auth, storefront
+from app.services import storefront
 from app.session_store import store
 
 logger = logging.getLogger(__name__)
