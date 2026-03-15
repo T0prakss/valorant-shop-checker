@@ -9,7 +9,9 @@ export default function LoginPage() {
   const { state, dispatch } = useAuth();
   const navigate = useNavigate();
 
-  const [stage, setStage] = useState<Stage>('start');
+  const [stage, setStage] = useState<Stage>(
+    () => (sessionStorage.getItem('login_stage') === 'paste' ? 'paste' : 'start')
+  );
   const [pastedUrl, setPastedUrl] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -25,6 +27,7 @@ export default function LoginPage() {
     try {
       const { auth_url } = await api.getAuthUrl();
       window.open(auth_url, '_blank', 'noopener');
+      sessionStorage.setItem('login_stage', 'paste');
       setStage('paste');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to start login');
@@ -44,6 +47,7 @@ export default function LoginPage() {
       const res = await api.submitToken(pastedUrl.trim());
 
       if (res.status === 'success' && res.puuid && res.session_token) {
+        sessionStorage.removeItem('login_stage');
         api.storeToken(res.session_token);
         dispatch({ type: 'LOGIN_SUCCESS', puuid: res.puuid });
         navigate('/shop');
@@ -58,6 +62,7 @@ export default function LoginPage() {
   }
 
   function handleBack() {
+    sessionStorage.removeItem('login_stage');
     setStage('start');
     setPastedUrl('');
     setError(null);
