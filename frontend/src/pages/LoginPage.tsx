@@ -3,17 +3,14 @@ import { Navigate, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import * as api from '../api/client';
 
-type Stage = 'credentials' | 'mfa';
+type Stage = 'start' | 'paste';
 
 export default function LoginPage() {
   const { state, dispatch } = useAuth();
   const navigate = useNavigate();
 
-  const [stage, setStage] = useState<Stage>('credentials');
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [mfaCode, setMfaCode] = useState('');
-  const [mfaEmail, setMfaEmail] = useState('');
+  const [stage, setStage] = useState<Stage>('start');
+  const [pastedUrl, setPastedUrl] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -21,57 +18,47 @@ export default function LoginPage() {
     return <Navigate to="/shop" replace />;
   }
 
-  async function handleLogin(e: React.FormEvent) {
-    e.preventDefault();
+  async function handleOpenLogin() {
     setLoading(true);
     setError(null);
 
     try {
-      const res = await api.login(username, password);
+      const { auth_url } = await api.getAuthUrl();
+      window.open(auth_url, '_blank', 'noopener');
+      setStage('paste');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to start login');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleSubmitUrl(e: React.FormEvent) {
+    e.preventDefault();
+    if (!pastedUrl.trim()) return;
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const res = await api.submitToken(pastedUrl.trim());
 
       if (res.status === 'success' && res.puuid) {
         dispatch({ type: 'LOGIN_SUCCESS', puuid: res.puuid });
         navigate('/shop');
-      } else if (res.status === 'mfa_required') {
-        setMfaEmail(res.mfa_email ?? '');
-        setStage('mfa');
-        setLoading(false);
       } else {
         setError(res.error ?? 'Authentication failed');
         setLoading(false);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to log in');
-      setLoading(false);
-    }
-  }
-
-  async function handleMfa(e: React.FormEvent) {
-    e.preventDefault();
-    setLoading(true);
-    setError(null);
-
-    try {
-      const res = await api.submitMfa(mfaCode);
-
-      if (res.status === 'success' && res.puuid) {
-        dispatch({ type: 'LOGIN_SUCCESS', puuid: res.puuid });
-        navigate('/shop');
-      } else {
-        setError(res.error ?? 'MFA verification failed');
-        setMfaCode('');
-        setLoading(false);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'MFA verification failed');
-      setMfaCode('');
+      setError(err instanceof Error ? err.message : 'Failed to authenticate');
       setLoading(false);
     }
   }
 
   function handleBack() {
-    setStage('credentials');
-    setMfaCode('');
+    setStage('start');
+    setPastedUrl('');
     setError(null);
   }
 
@@ -99,82 +86,51 @@ export default function LoginPage() {
             Check your daily store without launching the game
           </p>
 
-          {stage === 'credentials' ? (
-            <form onSubmit={handleLogin} className="space-y-4">
-              <div>
-                <label htmlFor="username" className="mb-1 block text-xs font-medium uppercase tracking-widest text-text-secondary">
-                  Riot Username
-                </label>
-                <input
-                  id="username"
-                  type="text"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  required
-                  autoComplete="username"
-                  className="w-full rounded border border-border bg-bg-primary px-3 py-2.5 text-sm text-text-primary placeholder-text-secondary/50 outline-none transition-colors focus:border-accent-red"
-                  placeholder="Enter your Riot username"
-                />
-              </div>
-              <div>
-                <label htmlFor="password" className="mb-1 block text-xs font-medium uppercase tracking-widest text-text-secondary">
-                  Password
-                </label>
-                <input
-                  id="password"
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  autoComplete="current-password"
-                  className="w-full rounded border border-border bg-bg-primary px-3 py-2.5 text-sm text-text-primary placeholder-text-secondary/50 outline-none transition-colors focus:border-accent-red"
-                  placeholder="Enter your password"
-                />
-              </div>
+          {stage === 'start' ? (
+            <>
               <button
-                type="submit"
+                onClick={handleOpenLogin}
                 disabled={loading}
                 className="flex w-full items-center justify-center gap-2 rounded bg-accent-red py-3 text-sm font-bold uppercase tracking-widest text-white transition-all hover:brightness-110 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
                 style={{ fontFamily: "'Oswald', sans-serif" }}
               >
                 {loading && <Spinner />}
-                SIGN IN
+                SIGN IN WITH RIOT
               </button>
 
               {error && (
-                <p className="text-center text-sm text-accent-red">{error}</p>
+                <p className="mt-4 text-center text-sm text-accent-red">{error}</p>
               )}
-            </form>
+            </>
           ) : (
-            <form onSubmit={handleMfa} className="animate-slide-in space-y-4">
-              <p className="text-center text-sm text-text-secondary">
-                Enter the verification code sent to
-                <br />
-                <span className="font-medium text-text-primary">{mfaEmail || 'your email'}</span>
-              </p>
-              <div>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  autoComplete="one-time-code"
-                  value={mfaCode}
-                  onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                  required
-                  autoFocus
-                  className="w-full rounded border border-border bg-bg-primary px-3 py-2.5 text-center text-lg tracking-[0.5em] text-text-primary outline-none transition-colors focus:border-accent-red"
-                  placeholder="000000"
-                  maxLength={6}
-                />
+            <div className="animate-slide-in space-y-4">
+              <div className="rounded border border-border bg-bg-primary p-4 text-sm text-text-secondary">
+                <p className="mb-3 font-medium text-text-primary">After logging in on Riot's page:</p>
+                <ol className="list-inside list-decimal space-y-1.5 text-xs leading-relaxed">
+                  <li>You'll see a <span className="text-accent-red">"can't connect"</span> error page — this is expected</li>
+                  <li>Copy the <span className="text-text-primary">entire URL</span> from the address bar</li>
+                  <li>Paste it below</li>
+                </ol>
               </div>
-              <button
-                type="submit"
-                disabled={loading || mfaCode.length < 6}
-                className="flex w-full items-center justify-center gap-2 rounded bg-accent-red py-3 text-sm font-bold uppercase tracking-widest text-white transition-all hover:brightness-110 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
-                style={{ fontFamily: "'Oswald', sans-serif" }}
-              >
-                {loading && <Spinner />}
-                VERIFY
-              </button>
+
+              <form onSubmit={handleSubmitUrl} className="space-y-3">
+                <textarea
+                  value={pastedUrl}
+                  onChange={(e) => setPastedUrl(e.target.value)}
+                  placeholder="Paste the URL here (starts with http://localhost/redirect#...)"
+                  rows={3}
+                  className="w-full resize-none rounded border border-border bg-bg-primary px-3 py-2.5 text-xs text-text-primary placeholder-text-secondary/50 outline-none transition-colors focus:border-accent-red"
+                />
+                <button
+                  type="submit"
+                  disabled={loading || !pastedUrl.trim()}
+                  className="flex w-full items-center justify-center gap-2 rounded bg-accent-red py-3 text-sm font-bold uppercase tracking-widest text-white transition-all hover:brightness-110 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
+                  style={{ fontFamily: "'Oswald', sans-serif" }}
+                >
+                  {loading && <Spinner />}
+                  COMPLETE LOGIN
+                </button>
+              </form>
 
               {error && (
                 <p className="text-center text-sm text-accent-red">{error}</p>
@@ -186,16 +142,16 @@ export default function LoginPage() {
                 className="mx-auto block text-xs uppercase tracking-widest text-text-secondary transition-colors hover:text-text-primary"
                 style={{ fontFamily: "'Oswald', sans-serif" }}
               >
-                Back
+                Start over
               </button>
-            </form>
+            </div>
           )}
         </div>
 
         <p className="mt-6 text-center text-xs leading-relaxed text-text-secondary/70">
-          Your credentials are sent securely over HTTPS directly to
+          You'll log in on Riot's official page — this app never sees your password.
           <br />
-          Riot's authentication servers. This app does not store your password.
+          Only a temporary access token is used to fetch your store.
         </p>
         <p className="mt-4 text-center text-[10px] leading-relaxed text-text-secondary/50">
           This application is not endorsed by Riot Games and does not reflect the

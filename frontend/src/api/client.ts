@@ -23,23 +23,19 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 // Auth
 
 export interface LoginResponse {
-  status: 'success' | 'mfa_required' | 'error';
+  status: 'success' | 'error';
   puuid?: string | null;
-  mfa_email?: string | null;
   error?: string | null;
 }
 
-export function login(username: string, password: string): Promise<LoginResponse> {
-  return request('/api/auth/login', {
-    method: 'POST',
-    body: JSON.stringify({ username, password }),
-  });
+export function getAuthUrl(): Promise<{ auth_url: string }> {
+  return request('/api/auth/url');
 }
 
-export function submitMfa(code: string): Promise<LoginResponse> {
-  return request('/api/auth/mfa', {
+export function submitToken(url: string): Promise<LoginResponse> {
+  return request('/api/auth/token', {
     method: 'POST',
-    body: JSON.stringify({ code }),
+    body: JSON.stringify({ url }),
   });
 }
 

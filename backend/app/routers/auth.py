@@ -33,60 +33,68 @@ def _check_rate_limit(ip: str) -> None:
         _rate_log[ip] = timestamps
 
 
-# --- In-memory MFA session store ---
-
-_mfa_sessions: dict[str, dict[str, str]] = {}
-_mfa_lock = threading.Lock()
-
-
-def _store_mfa_session(ip: str, cookies: dict[str, str]) -> None:
-    with _mfa_lock:
-        _mfa_sessions[ip] = cookies
-
-
-def _pop_mfa_session(ip: str) -> dict[str, str] | None:
-    with _mfa_lock:
-        return _mfa_sessions.pop(ip, None)
-
-
 # --- Request/response models ---
 
-class LoginRequest(BaseModel):
-    username: str
-    password: str
+class AuthUrlResponse(BaseModel):
+    auth_url: str
 
 
-class MfaRequest(BaseModel):
-    code: str
+class TokenSubmitRequest(BaseModel):
+    url: str
 
 
 class LoginResponse(BaseModel):
-    status: str  # "success" | "mfa_required" | "error"
+    status: str  # "success" | "error"
     puuid: str | None = None
-    mfa_email: str | None = None
     error: str | None = None
 
 
 # --- Endpoints ---
 
-@router.post("/login", response_model=LoginResponse)
-async def login(body: LoginRequest, request: Request, response: Response) -> LoginResponse:
-    """Authenticate with Riot using username/password."""
-    client_ip = request.client.host if request.client else "unknown"
-    _check_rate_limit(client_ip)
+@router.get("/url")
+async def get_login_url() -> AuthUrlResponse:
+    """Return the Riot OAuth URL for the user to open in their browser."""
+    return AuthUrlResponse(auth_url=riot_auth.get_auth_url())
+
+
+@router.post("/token", response_model=LoginResponse)
+async def submit_token(body: TokenSubmitRequest, request: Request, response: Response) -> LoginResponse:
+    """Accept the pasted redirect URL, extract tokens, and create a session."""
+    _check_rate_limit(request.client.host if request.client else "unknown")
 
     try:
-        tokens = await riot_auth.authenticate(body.username, body.password)
-        return await _create_session(tokens, response)
+        tokens = riot_auth.extract_tokens(body.url)
+        access_token = tokens["access_token"]
+        id_token = tokens.get("id_token", "")
 
-    except riot_auth.MfaRequiredError as e:
-        _store_mfa_session(client_ip, e.cookies)
-        return LoginResponse(status="mfa_required", mfa_email=e.email)
+        entitlements = await riot_auth.get_entitlements(access_token)
+        puuid = await riot_auth.get_player_info(access_token)
+        region, shard = await riot_auth.get_region(access_token, id_token)
 
-    except riot_auth.RateLimitError:
-        return LoginResponse(status="error", error="Rate limited by Riot servers. Try again shortly.")
+        session_data = SessionData(
+            access_token=access_token,
+            entitlements_token=entitlements,
+            puuid=puuid,
+            shard=shard,
+            region=region,
+        )
+        session_token = store.create(session_data)
+
+        response.set_cookie(
+            key="session_token",
+            value=session_token,
+            httponly=True,
+            secure=True,
+            samesite="none",
+            max_age=3 * 3600,
+        )
+
+        return LoginResponse(status="success", puuid=puuid)
+
     except riot_auth.AuthenticationError as e:
         return LoginResponse(status="error", error=str(e))
+    except riot_auth.RateLimitError:
+        return LoginResponse(status="error", error="Rate limited by Riot servers. Try again shortly.")
     except httpx.HTTPStatusError as e:
         logger.error("Riot API HTTP error: %s", e.response.status_code)
         return LoginResponse(status="error", error=f"Riot API error ({e.response.status_code})")
@@ -94,69 +102,8 @@ async def login(body: LoginRequest, request: Request, response: Response) -> Log
         logger.error("Network error contacting Riot: %s", e)
         return LoginResponse(status="error", error="Could not reach Riot servers. Try again.")
     except Exception:
-        logger.exception("Login failed")
+        logger.exception("Token submission failed")
         return LoginResponse(status="error", error="Authentication failed unexpectedly")
-
-
-@router.post("/mfa", response_model=LoginResponse)
-async def submit_mfa(body: MfaRequest, request: Request, response: Response) -> LoginResponse:
-    """Submit MFA code to complete authentication."""
-    client_ip = request.client.host if request.client else "unknown"
-    _check_rate_limit(client_ip)
-
-    cookies = _pop_mfa_session(client_ip)
-    if not cookies:
-        return LoginResponse(status="error", error="MFA session expired. Please log in again.")
-
-    try:
-        tokens = await riot_auth.authenticate_mfa(body.code, cookies)
-        return await _create_session(tokens, response)
-
-    except riot_auth.RateLimitError:
-        return LoginResponse(status="error", error="Rate limited by Riot servers. Try again shortly.")
-    except riot_auth.AuthenticationError as e:
-        # Put cookies back so user can retry with correct code
-        _store_mfa_session(client_ip, cookies)
-        return LoginResponse(status="error", error=str(e))
-    except httpx.HTTPStatusError as e:
-        logger.error("Riot API HTTP error: %s", e.response.status_code)
-        return LoginResponse(status="error", error=f"Riot API error ({e.response.status_code})")
-    except httpx.RequestError as e:
-        logger.error("Network error contacting Riot: %s", e)
-        return LoginResponse(status="error", error="Could not reach Riot servers. Try again.")
-    except Exception:
-        logger.exception("MFA verification failed")
-        return LoginResponse(status="error", error="Authentication failed unexpectedly")
-
-
-async def _create_session(tokens: dict[str, str], response: Response) -> LoginResponse:
-    """Exchange Riot tokens for a local session."""
-    access_token = tokens["access_token"]
-    id_token = tokens.get("id_token", "")
-
-    entitlements = await riot_auth.get_entitlements(access_token)
-    puuid = await riot_auth.get_player_info(access_token)
-    region, shard = await riot_auth.get_region(access_token, id_token)
-
-    session_data = SessionData(
-        access_token=access_token,
-        entitlements_token=entitlements,
-        puuid=puuid,
-        shard=shard,
-        region=region,
-    )
-    session_token = store.create(session_data)
-
-    response.set_cookie(
-        key="session_token",
-        value=session_token,
-        httponly=True,
-        secure=True,
-        samesite="none",
-        max_age=3 * 3600,
-    )
-
-    return LoginResponse(status="success", puuid=puuid)
 
 
 @router.post("/logout")
