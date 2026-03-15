@@ -1,7 +1,6 @@
 import logging
 import threading
 import time
-import uuid
 
 import httpx
 from fastapi import APIRouter, Cookie, HTTPException, Request, Response
@@ -34,123 +33,130 @@ def _check_rate_limit(ip: str) -> None:
         _rate_log[ip] = timestamps
 
 
-# --- Response models ---
+# --- In-memory MFA session store ---
 
-class AuthStartResponse(BaseModel):
-    auth_url: str
-    auth_id: str
+_mfa_sessions: dict[str, dict[str, str]] = {}
+_mfa_lock = threading.Lock()
 
 
-class AuthPollResponse(BaseModel):
-    status: str  # "pending" | "success" | "error"
+def _store_mfa_session(ip: str, cookies: dict[str, str]) -> None:
+    with _mfa_lock:
+        _mfa_sessions[ip] = cookies
+
+
+def _pop_mfa_session(ip: str) -> dict[str, str] | None:
+    with _mfa_lock:
+        return _mfa_sessions.pop(ip, None)
+
+
+# --- Request/response models ---
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class MfaRequest(BaseModel):
+    code: str
+
+
+class LoginResponse(BaseModel):
+    status: str  # "success" | "mfa_required" | "error"
     puuid: str | None = None
-    error: str | None = None
-
-
-class CallbackResponse(BaseModel):
-    status: str
+    mfa_email: str | None = None
     error: str | None = None
 
 
 # --- Endpoints ---
 
-@router.post("/start", response_model=AuthStartResponse)
-async def start_login(request: Request) -> AuthStartResponse:
-    """Start OAuth login flow. Returns the Riot auth URL and an auth_id for polling."""
-    _check_rate_limit(request.client.host if request.client else "unknown")
-
-    auth_id = str(uuid.uuid4())
-    auth_url = riot_auth.get_auth_url(auth_id)
-
-    return AuthStartResponse(auth_url=auth_url, auth_id=auth_id)
-
-
-@router.post("/callback")
-async def oauth_callback(request: Request, response: Response) -> CallbackResponse:
-    """Receive tokens from the OAuth redirect page's JavaScript."""
-    params = dict(request.query_params)
-
-    auth_id = params.get("auth_id", "")
-    access_token = params.get("access_token")
-    id_token = params.get("id_token", "")
-
-    if not access_token:
-        return CallbackResponse(status="error", error="No access_token received")
+@router.post("/login", response_model=LoginResponse)
+async def login(body: LoginRequest, request: Request, response: Response) -> LoginResponse:
+    """Authenticate with Riot using username/password."""
+    client_ip = request.client.host if request.client else "unknown"
+    _check_rate_limit(client_ip)
 
     try:
-        entitlements = await riot_auth.get_entitlements(access_token)
-        puuid = await riot_auth.get_player_info(access_token)
-        region, shard = await riot_auth.get_region(access_token, id_token)
+        tokens = await riot_auth.authenticate(body.username, body.password)
+        return await _create_session(tokens, response)
 
-        session_data = SessionData(
-            access_token=access_token,
-            entitlements_token=entitlements,
-            puuid=puuid,
-            shard=shard,
-            region=region,
-        )
-        session_token = store.create(session_data)
+    except riot_auth.MfaRequiredError as e:
+        _store_mfa_session(client_ip, e.cookies)
+        return LoginResponse(status="mfa_required", mfa_email=e.email)
 
-        # Store the result keyed by the auth_id from /start so the
-        # frontend can pick it up via /poll.
-        if auth_id:
-            riot_auth.store_pending_auth(auth_id, {
-                "session_token": session_token,
-                "puuid": puuid,
-            })
-
-        response.set_cookie(
-            key="session_token",
-            value=session_token,
-            httponly=True,
-            secure=True,
-            samesite="none",
-            max_age=3 * 3600,
-        )
-
-        return CallbackResponse(status="success")
     except riot_auth.RateLimitError:
-        return CallbackResponse(status="error", error="Rate limited by Riot servers. Try again shortly.")
+        return LoginResponse(status="error", error="Rate limited by Riot servers. Try again shortly.")
     except riot_auth.AuthenticationError as e:
-        logger.warning("Authentication failed: %s", e)
-        return CallbackResponse(status="error", error=str(e))
+        return LoginResponse(status="error", error=str(e))
     except httpx.HTTPStatusError as e:
         logger.error("Riot API HTTP error: %s", e.response.status_code)
-        return CallbackResponse(status="error", error=f"Riot API error ({e.response.status_code})")
+        return LoginResponse(status="error", error=f"Riot API error ({e.response.status_code})")
     except httpx.RequestError as e:
         logger.error("Network error contacting Riot: %s", e)
-        return CallbackResponse(status="error", error="Could not reach Riot servers. Try again.")
-    except Exception as e:
-        logger.exception("OAuth callback failed")
-        return CallbackResponse(status="error", error="Authentication failed unexpectedly")
+        return LoginResponse(status="error", error="Could not reach Riot servers. Try again.")
+    except Exception:
+        logger.exception("Login failed")
+        return LoginResponse(status="error", error="Authentication failed unexpectedly")
 
 
-@router.get("/poll")
-async def poll_auth(
-    request: Request,
-    response: Response,
-) -> AuthPollResponse:
-    """Poll for auth completion using the auth_id from /start."""
-    auth_id = request.query_params.get("auth_id", "")
-    if not auth_id:
-        return AuthPollResponse(status="pending")
+@router.post("/mfa", response_model=LoginResponse)
+async def submit_mfa(body: MfaRequest, request: Request, response: Response) -> LoginResponse:
+    """Submit MFA code to complete authentication."""
+    client_ip = request.client.host if request.client else "unknown"
+    _check_rate_limit(client_ip)
 
-    pending = riot_auth.pop_pending_auth(auth_id)
-    if not pending:
-        return AuthPollResponse(status="pending")
+    cookies = _pop_mfa_session(client_ip)
+    if not cookies:
+        return LoginResponse(status="error", error="MFA session expired. Please log in again.")
 
-    # Set the session cookie on the frontend's polling request so
-    # subsequent API calls are authenticated.
+    try:
+        tokens = await riot_auth.authenticate_mfa(body.code, cookies)
+        return await _create_session(tokens, response)
+
+    except riot_auth.RateLimitError:
+        return LoginResponse(status="error", error="Rate limited by Riot servers. Try again shortly.")
+    except riot_auth.AuthenticationError as e:
+        # Put cookies back so user can retry with correct code
+        _store_mfa_session(client_ip, cookies)
+        return LoginResponse(status="error", error=str(e))
+    except httpx.HTTPStatusError as e:
+        logger.error("Riot API HTTP error: %s", e.response.status_code)
+        return LoginResponse(status="error", error=f"Riot API error ({e.response.status_code})")
+    except httpx.RequestError as e:
+        logger.error("Network error contacting Riot: %s", e)
+        return LoginResponse(status="error", error="Could not reach Riot servers. Try again.")
+    except Exception:
+        logger.exception("MFA verification failed")
+        return LoginResponse(status="error", error="Authentication failed unexpectedly")
+
+
+async def _create_session(tokens: dict[str, str], response: Response) -> LoginResponse:
+    """Exchange Riot tokens for a local session."""
+    access_token = tokens["access_token"]
+    id_token = tokens.get("id_token", "")
+
+    entitlements = await riot_auth.get_entitlements(access_token)
+    puuid = await riot_auth.get_player_info(access_token)
+    region, shard = await riot_auth.get_region(access_token, id_token)
+
+    session_data = SessionData(
+        access_token=access_token,
+        entitlements_token=entitlements,
+        puuid=puuid,
+        shard=shard,
+        region=region,
+    )
+    session_token = store.create(session_data)
+
     response.set_cookie(
         key="session_token",
-        value=pending["session_token"],
+        value=session_token,
         httponly=True,
         secure=True,
         samesite="none",
         max_age=3 * 3600,
     )
 
-    return AuthPollResponse(status="success", puuid=pending["puuid"])
+    return LoginResponse(status="success", puuid=puuid)
 
 
 @router.post("/logout")

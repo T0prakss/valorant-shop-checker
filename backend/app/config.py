@@ -5,7 +5,7 @@ class Settings(BaseSettings):
     ENCRYPTION_KEY: str = ""
     ALLOWED_ORIGINS: str = "http://localhost:5173,http://localhost:3000,http://localhost"
     ENVIRONMENT: str = "development"
-    API_URL: str = "http://localhost:8000"
+    API_URL: str = ""  # No longer used but kept for .env compat
 
     @property
     def allowed_origins_list(self) -> list[str]:

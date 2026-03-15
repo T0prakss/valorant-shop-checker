@@ -22,23 +22,25 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 // Auth
 
-export interface AuthStartResponse {
-  auth_url: string;
-  auth_id: string;
-}
-
-export interface AuthPollResponse {
-  status: 'pending' | 'success' | 'error';
+export interface LoginResponse {
+  status: 'success' | 'mfa_required' | 'error';
   puuid?: string | null;
+  mfa_email?: string | null;
   error?: string | null;
 }
 
-export function startAuth(): Promise<AuthStartResponse> {
-  return request('/api/auth/start', { method: 'POST' });
+export function login(username: string, password: string): Promise<LoginResponse> {
+  return request('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ username, password }),
+  });
 }
 
-export function pollAuth(authId: string): Promise<AuthPollResponse> {
-  return request(`/api/auth/poll?auth_id=${encodeURIComponent(authId)}`);
+export function submitMfa(code: string): Promise<LoginResponse> {
+  return request('/api/auth/mfa', {
+    method: 'POST',
+    body: JSON.stringify({ code }),
+  });
 }
 
 export function logout(): Promise<{ status: string }> {
