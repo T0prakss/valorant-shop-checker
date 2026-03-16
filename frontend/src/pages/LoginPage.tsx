@@ -104,6 +104,12 @@ export default function LoginPage() {
                 SIGN IN WITH RIOT
               </button>
 
+              <p className="mt-4 text-center text-xs leading-relaxed text-text-secondary/70">
+                A new tab will open for Riot login. After signing in, you'll see
+                a <span className="text-accent-red">"can't connect"</span> page —
+                that's normal. Copy the URL and come back here to paste it.
+              </p>
+
               {error && (
                 <p className="mt-4 text-center text-sm text-accent-red">{error}</p>
               )}
@@ -115,7 +121,7 @@ export default function LoginPage() {
                 <ol className="list-inside list-decimal space-y-1.5 text-xs leading-relaxed">
                   <li>You'll see a <span className="text-accent-red">"can't connect"</span> error page — this is expected</li>
                   <li>Copy the <span className="text-text-primary">entire URL</span> from the address bar</li>
-                  <li>Paste it below</li>
+                  <li>Come back to <span className="text-text-primary">this tab</span> and paste it below</li>
                 </ol>
               </div>
 
