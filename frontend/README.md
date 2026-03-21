@@ -15,7 +15,7 @@ The dev server starts at `http://localhost:5173` with a proxy forwarding `/api` 
 
 | Variable | Required | Description |
 |---|---|---|
-| `VITE_API_URL` | No | Backend API base URL. Not needed in dev (Vite proxy handles it). Set to the backend URL in production (e.g. `https://valshop.duckdns.org`). |
+| `VITE_API_URL` | No | Backend API base URL. Not needed in dev (Vite proxy handles it). Set to your backend URL in production (e.g. `https://your-backend.example.com`). |
 
 ## Building for Production
 
