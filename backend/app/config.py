@@ -5,7 +5,6 @@ class Settings(BaseSettings):
     ENCRYPTION_KEY: str = ""
     ALLOWED_ORIGINS: str = "http://localhost:5173,http://localhost:3000,http://localhost"
     ENVIRONMENT: str = "development"
-    API_URL: str = ""  # Unused; kept so existing .env files don't cause validation errors
 
     @property
     def allowed_origins_list(self) -> list[str]:

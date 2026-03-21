@@ -30,12 +30,6 @@ class Bundle(BaseModel):
     duration_remaining_secs: int
 
 
-class NightMarketOffer(BaseModel):
-    skin: SkinOffer
-    discount_percent: float
-    discounted_cost: int
-
-
 class Wallet(BaseModel):
     valorant_points: int
     radianite_points: int

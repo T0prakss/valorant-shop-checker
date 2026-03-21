@@ -16,18 +16,22 @@ function formatTime(totalSecs: number): string {
 
 export default function BundleCard({ bundle }: BundleCardProps) {
   const [remaining, setRemaining] = useState(bundle.duration_remaining_secs);
+  const [prevSecs, setPrevSecs] = useState(bundle.duration_remaining_secs);
 
-  useEffect(() => {
+  if (bundle.duration_remaining_secs !== prevSecs) {
+    setPrevSecs(bundle.duration_remaining_secs);
     setRemaining(bundle.duration_remaining_secs);
-  }, [bundle.duration_remaining_secs]);
+  }
+
+  const isExpired = remaining <= 0;
 
   useEffect(() => {
-    if (remaining <= 0) return;
+    if (isExpired) return;
     const interval = setInterval(() => {
       setRemaining((prev) => Math.max(0, prev - 1));
     }, 1000);
     return () => clearInterval(interval);
-  }, [remaining <= 0]);
+  }, [isExpired]);
 
   const hasDiscount = bundle.total_discounted_price < bundle.total_base_price;
 

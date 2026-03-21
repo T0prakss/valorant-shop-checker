@@ -1,5 +1,6 @@
 import {
   createContext,
+  useContext,
   useEffect,
   useReducer,
   type Dispatch,
@@ -41,13 +42,18 @@ function authReducer(state: AuthState, action: AuthAction): AuthState {
   }
 }
 
-export const AuthContext = createContext<{
+const AuthContext = createContext<{
   state: AuthState;
   dispatch: Dispatch<AuthAction>;
 }>({
   state: initialState,
   dispatch: () => undefined,
 });
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function useAuth() {
+  return useContext(AuthContext);
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(authReducer, initialState);

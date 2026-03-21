@@ -36,12 +36,6 @@ export interface Bundle {
   duration_remaining_secs: number;
 }
 
-export interface NightMarketOffer {
-  skin: SkinOffer;
-  discount_percent: number;
-  discounted_cost: number;
-}
-
 export interface Wallet {
   valorant_points: number;
   radianite_points: number;

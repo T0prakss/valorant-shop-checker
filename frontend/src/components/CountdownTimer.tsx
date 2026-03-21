@@ -7,13 +7,17 @@ interface CountdownTimerProps {
 
 export default function CountdownTimer({ secondsRemaining, onExpire }: CountdownTimerProps) {
   const [remaining, setRemaining] = useState(secondsRemaining);
+  const [prevSecs, setPrevSecs] = useState(secondsRemaining);
 
-  useEffect(() => {
+  if (secondsRemaining !== prevSecs) {
+    setPrevSecs(secondsRemaining);
     setRemaining(secondsRemaining);
-  }, [secondsRemaining]);
+  }
+
+  const isExpired = remaining <= 0;
 
   useEffect(() => {
-    if (remaining <= 0) {
+    if (isExpired) {
       onExpire?.();
       return;
     }
@@ -30,7 +34,7 @@ export default function CountdownTimer({ secondsRemaining, onExpire }: Countdown
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [remaining <= 0, onExpire]);
+  }, [isExpired, onExpire]);
 
   const hours = Math.floor(remaining / 3600);
   const minutes = Math.floor((remaining % 3600) / 60);
